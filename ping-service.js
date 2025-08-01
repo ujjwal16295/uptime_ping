@@ -31,7 +31,7 @@ async function pingUrl(url, id) {
     const { error: updateError } = await supabase
       .from('monitored_urls')
       .update({ 
-        ping_count: supabase.rpc('increment', { x: 1, current_count: 'ping_count' }),
+        ping_count: supabase.sql`ping_count + 1`,
         last_pinged_at: new Date().toISOString(),
         last_response_time: responseTime,
         last_status_code: response.status,
@@ -58,7 +58,7 @@ async function pingUrl(url, id) {
     const { error: updateError } = await supabase
       .from('monitored_urls')
       .update({ 
-        ping_count: supabase.rpc('increment', { x: 1, current_count: 'ping_count' }),
+        ping_count: supabase.sql`ping_count + 1`,
         last_pinged_at: new Date().toISOString(),
         last_error: error.message,
         is_healthy: false
