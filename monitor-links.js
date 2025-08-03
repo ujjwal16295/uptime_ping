@@ -17,63 +17,83 @@ const transporter = nodemailer.createTransporter({
   },
 });
 
-// Function to ping a URL (API health check)
-async function pingUrl(url, timeout = 30000) {
-  const startTime = Date.now();
+// Function to ping a URL with retry logic for zero ping count users
+async function pingUrl(url, timeout = 30000, isZeroPingUser = false) {
+  const maxRetries = isZeroPingUser ? 3 : 1; // More retries for zero ping users
+  const baseTimeout = isZeroPingUser ? 45000 : timeout; // Longer timeout for zero ping users
+  const retryDelay = isZeroPingUser ? 5000 : 1000; // Longer delay between retries
   
-  try {
-    const response = await axios.get(url, {
-      timeout,
-      validateStatus: (status) => status >= 200 && status < 400, // Only 2xx and 3xx are successful
-      headers: {
-        'User-Agent': 'Link-Monitor/1.0',
-        'Accept': 'application/json, text/plain, */*'
-      }
-    });
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const currentTimeout = baseTimeout + (attempt - 1) * 15000; // Increase timeout with each retry
+    const startTime = Date.now();
     
-    const responseTime = Date.now() - startTime;
+    console.log(`Attempt ${attempt}/${maxRetries} for ${url}${isZeroPingUser ? ' (zero ping user - extended timeout)' : ''} - Timeout: ${currentTimeout}ms`);
     
-    // Try to parse JSON response for health checks
-    let responseData = null;
     try {
-      if (typeof response.data === 'object') {
+      const response = await axios.get(url, {
+        timeout: currentTimeout,
+        validateStatus: (status) => status >= 200 && status < 400,
+        headers: {
+          'User-Agent': 'Link-Monitor/1.0',
+          'Accept': 'application/json, text/plain, */*'
+        }
+      });
+      
+      const responseTime = Date.now() - startTime;
+      
+      // Try to parse JSON response for health checks
+      let responseData = null;
+      try {
+        if (typeof response.data === 'object') {
+          responseData = response.data;
+        } else if (typeof response.data === 'string') {
+          responseData = JSON.parse(response.data);
+        }
+      } catch (parseError) {
         responseData = response.data;
-      } else if (typeof response.data === 'string') {
-        responseData = JSON.parse(response.data);
       }
-    } catch (parseError) {
-      // Not JSON, that's okay for some health checks
-      responseData = response.data;
-    }
-    
-    return {
-      success: true,
-      status: response.status,
-      responseTime,
-      data: responseData,
-      message: responseData?.message || responseData?.status || 'OK'
-    };
-  } catch (error) {
-    const responseTime = Date.now() - startTime;
-    
-    // Check if it's a response error (4xx, 5xx)
-    if (error.response) {
+      
+      console.log(`✓ Success on attempt ${attempt} for ${url} (${responseTime}ms)`);
+      
       return {
-        success: false,
-        status: error.response.status,
-        error: `HTTP ${error.response.status}: ${error.response.statusText}`,
+        success: true,
+        status: response.status,
         responseTime,
-        code: error.code
+        data: responseData,
+        message: responseData?.message || responseData?.status || 'OK',
+        attempts: attempt
       };
+    } catch (error) {
+      const responseTime = Date.now() - startTime;
+      
+      // If this is the last attempt, return the error
+      if (attempt === maxRetries) {
+        console.log(`✗ Failed after ${attempt} attempts for ${url}`);
+        
+        if (error.response) {
+          return {
+            success: false,
+            status: error.response.status,
+            error: `HTTP ${error.response.status}: ${error.response.statusText}`,
+            responseTime,
+            code: error.code,
+            attempts: attempt
+          };
+        }
+        
+        return {
+          success: false,
+          error: error.message,
+          responseTime,
+          code: error.code,
+          attempts: attempt
+        };
+      }
+      
+      // Log the attempt failure and wait before retry
+      console.log(`✗ Attempt ${attempt} failed for ${url}: ${error.message} - Retrying in ${retryDelay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
     }
-    
-    // Network or timeout error
-    return {
-      success: false,
-      error: error.message,
-      responseTime,
-      code: error.code
-    };
   }
 }
 
@@ -87,6 +107,9 @@ async function sendFailureEmail(email, failedLinks) {
       const responseTime = link.responseTime 
         ? ` (Response time: ${link.responseTime}ms)` 
         : '';
+      const attempts = link.attempts > 1 
+        ? ` - Failed after ${link.attempts} attempts` 
+        : '';
       
       return `
         <div style="background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; margin-bottom: 12px;">
@@ -94,7 +117,7 @@ async function sendFailureEmail(email, failedLinks) {
             ${link.url}
           </div>
           <div style="color: #dc2626; font-size: 14px; background: #fef2f2; padding: 8px 12px; border-radius: 8px; border: 1px solid #fecaca;">
-            ${errorDetails}${responseTime}
+            ${errorDetails}${responseTime}${attempts}
           </div>
         </div>
       `;
@@ -160,7 +183,7 @@ async function sendFailureEmail(email, failedLinks) {
               </div>
               <div style="margin-bottom: 8px;">
                 <strong style="color: #92400e;">Timeout errors:</strong> 
-                <span style="color: #451a03;">API took too long to respond (>30 seconds)</span>
+                <span style="color: #451a03;">API took too long to respond (>30 seconds for regular users, >45 seconds for new users)</span>
               </div>
               <div>
                 <strong style="color: #92400e;">Network errors:</strong> 
@@ -281,7 +304,7 @@ async function monitorAllLinks() {
     // Fetch all users with their links
     const { data: users, error: fetchError } = await supabase
       .from('users')
-      .select('email, links, credit')
+      .select('email, links, credit, ping')
       .gt('credit', 0); // Only process users with credit > 0
 
     if (fetchError) {
@@ -293,7 +316,7 @@ async function monitorAllLinks() {
 
     // Process each user
     for (const user of users) {
-      const { email, links, credit } = user;
+      const { email, links, credit, ping } = user;
       
       // Skip users with no links
       if (!links || links.length === 0) {
@@ -307,34 +330,40 @@ async function monitorAllLinks() {
         continue;
       }
 
-      console.log(`Processing ${email}: ${links.length} links`);
+      // Determine if this is a zero ping user (new user or no successful pings yet)
+      const isZeroPingUser = ping === 0;
+      console.log(`Processing ${email}: ${links.length} links ${isZeroPingUser ? '(zero ping user - extended retry logic)' : ''}`);
       
       const failedLinks = [];
       let successfulPings = 0;
 
       // Ping all links for this user
       for (const url of links) {
-        console.log(`Pinging API endpoint: ${url} for ${email}`);
+        console.log(`Pinging API endpoint: ${url} for ${email}${isZeroPingUser ? ' with extended timeout' : ''}`);
         
-        const result = await pingUrl(url);
+        const result = await pingUrl(url, 30000, isZeroPingUser);
         
         if (result.success) {
           successfulPings++;
           const healthStatus = result.message || 'OK';
-          console.log(`✓ ${url} - Status: ${result.status} (${result.responseTime}ms) - ${healthStatus}`);
+          const attemptInfo = result.attempts > 1 ? ` (succeeded on attempt ${result.attempts})` : '';
+          console.log(`✓ ${url} - Status: ${result.status} (${result.responseTime}ms) - ${healthStatus}${attemptInfo}`);
         } else {
           failedLinks.push({
             url,
             error: result.error || 'Unknown error',
             status: result.status,
             responseTime: result.responseTime,
-            code: result.code
+            code: result.code,
+            attempts: result.attempts
           });
-          console.log(`✗ ${url} - Error: ${result.error} (${result.responseTime || 0}ms)`);
+          console.log(`✗ ${url} - Error: ${result.error} (${result.responseTime || 0}ms) - Failed after ${result.attempts} attempts`);
         }
 
         // Small delay between requests to be respectful to APIs
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // Longer delay for zero ping users to avoid overwhelming potentially slow services
+        const delayTime = isZeroPingUser ? 1000 : 200;
+        await new Promise(resolve => setTimeout(resolve, delayTime));
       }
 
       // Update user stats ONLY for successful pings
@@ -348,10 +377,12 @@ async function monitorAllLinks() {
         await sendFailureEmail(email, failedLinks);
       }
 
-      console.log(`Completed processing ${email}: ${successfulPings}/${links.length} successful pings (charged ${creditDeduction} credits)`);
+      console.log(`Completed processing ${email}: ${successfulPings}/${links.length} successful pings (charged ${creditDeduction} credits)${isZeroPingUser ? ' - Used extended retry logic' : ''}`);
       
       // Delay between users to avoid overwhelming the system
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Longer delay after processing zero ping users
+      const userDelayTime = isZeroPingUser ? 2000 : 500;
+      await new Promise(resolve => setTimeout(resolve, userDelayTime));
     }
 
     console.log('Link monitoring completed successfully');
