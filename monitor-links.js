@@ -17,6 +17,128 @@ const transporter = nodemailer.createTransporter({
   },
 });
 
+// Function to send zero credit notification email
+async function sendZeroCreditEmail(email) {
+  const emailHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>NapStopper - Credit Required</title>
+    </head>
+    <body style="margin: 0; padding: 0; background: linear-gradient(135deg, #fef7ed 0%, #fef3c7 50%, #fef3c7 100%); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+      <!-- Header -->
+      <div style="background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(8px); border-bottom: 1px solid #e5e7eb; padding: 20px 0;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 0 16px;">
+          <div style="display: flex; align-items: center; justify-content: center;">
+            <div style="background: linear-gradient(135deg, #ea580c 0%, #d97706 100%); padding: 12px; border-radius: 12px; margin-right: 12px;">
+              <div style="width: 24px; height: 24px; background: white; border-radius: 4px; display: flex; align-items: center; justify-content: center;">
+                <span style="color: #ea580c; font-weight: bold; font-size: 14px;">N</span>
+              </div>
+            </div>
+            <h1 style="font-size: 28px; font-weight: bold; background: linear-gradient(135deg, #ea580c 0%, #d97706 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0;">
+              NapStopper
+            </h1>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main Content -->
+      <div style="max-width: 600px; margin: 0 auto; padding: 32px 16px;">
+        <div style="background: white; border-radius: 24px; padding: 32px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); border: 1px solid #f3f4f6;">
+          <!-- Alert Header -->
+          <div style="text-align: center; margin-bottom: 32px;">
+            <div style="background: #fef3c7; padding: 12px; border-radius: 16px; width: 64px; height: 64px; margin: 0 auto 16px; display: flex; align-items: center; justify-content: center;">
+              <span style="font-size: 32px;">💳</span>
+            </div>
+            <h2 style="font-size: 32px; font-weight: bold; color: #111827; margin: 0 0 8px 0;">Credit Required</h2>
+            <p style="color: #6b7280; font-size: 16px; margin: 0;">
+              Your account has insufficient credits to continue monitoring
+            </p>
+          </div>
+
+          <!-- Message -->
+          <div style="background: linear-gradient(135deg, #fef7ed 0%, #fef3c7 100%); padding: 24px; border-radius: 16px; border: 1px solid #fed7aa; margin-bottom: 32px; text-align: center;">
+            <h3 style="font-size: 20px; font-weight: 600; color: #92400e; margin: 0 0 12px 0;">Monitoring Paused</h3>
+            <p style="color: #451a03; font-size: 16px; margin: 0 0 16px 0;">
+              Your credit balance is too low to continue monitoring your API endpoints. 
+              Each successful ping costs 10 credits.
+            </p>
+            <p style="color: #451a03; font-size: 14px; margin: 0;">
+              <strong>Don't worry!</strong> Your monitoring will automatically resume once you add credits to your account.
+            </p>
+          </div>
+
+          <!-- Action Button -->
+          <div style="text-align: center; margin-bottom: 24px;">
+            <a href="https://uptime-frontend-ivory.vercel.app/" style="background: linear-gradient(135deg, #ea580c 0%, #d97706 100%); border-radius: 12px; padding: 16px 32px; display: inline-block; text-decoration: none; color: white; font-weight: 600; font-size: 16px;">
+              Login & Get Credits
+            </a>
+          </div>
+
+          <!-- Instructions -->
+          <div style="background: #f8fafc; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 24px;">
+            <h3 style="font-size: 16px; font-weight: 600; color: #374151; margin: 0 0 12px 0;">How to add credits:</h3>
+            <ol style="color: #6b7280; font-size: 14px; margin: 0; padding-left: 20px;">
+              <li style="margin-bottom: 8px;">Click the "Login & Get Credits" button above</li>
+              <li style="margin-bottom: 8px;">Log into your NapStopper account</li>
+              <li style="margin-bottom: 8px;">Navigate to the credits section</li>
+              <li style="margin-bottom: 8px;">Purchase the credits package that suits your needs</li>
+              <li>Your monitoring will automatically resume within the next cycle</li>
+            </ol>
+          </div>
+
+          <!-- Footer Message -->
+          <div style="text-align: center; padding-top: 24px; border-top: 1px solid #e5e7eb;">
+            <p style="color: #6b7280; font-size: 14px; margin: 0 0 8px 0;">
+              Best regards,<br>
+              <strong>NapStopper Monitoring Service</strong>
+            </p>
+            <p style="color: #9ca3af; font-size: 12px; margin: 0;">
+              Notification sent at ${new Date().toLocaleString()}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <footer style="background: #111827; color: white; padding: 32px 0;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 0 16px; text-align: center;">
+          <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 12px;">
+            <div style="background: linear-gradient(135deg, #ea580c 0%, #d97706 100%); padding: 6px; border-radius: 8px; margin-right: 12px;">
+              <div style="width: 24px; height: 24px; background: white; border-radius: 4px; display: flex; align-items: center; justify-content: center;">
+                <span style="color: #ea580c; font-weight: bold; font-size: 14px;">N</span>
+              </div>
+            </div>
+            <h3 style="font-size: 18px; font-weight: bold; margin: 0;">NapStopper</h3>
+          </div>
+          <p style="color: #9ca3af; font-size: 14px; margin: 0;">
+            Keep your free-tier applications running 24/7 without any hassle.
+          </p>
+        </div>
+      </footer>
+    </body>
+    </html>
+  `;
+
+  const mailOptions = {
+    from: process.env.GMAIL_USER,
+    to: email,
+    subject: '💳 NapStopper - Credit Required to Continue Monitoring',
+    html: emailHtml,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    console.log(`Zero credit notification sent to ${email}`);
+    return true;
+  } catch (error) {
+    console.error(`Failed to send zero credit email to ${email}:`, error.message);
+    return false;
+  }
+}
+
 // Function to ping a URL with retry logic for zero ping count users
 async function pingUrl(url, timeout = 30000, isZeroPingUser = false) {
   const maxRetries = isZeroPingUser ? 3 : 1; // More retries for zero ping users
@@ -301,18 +423,41 @@ async function monitorAllLinks() {
   console.log('Starting link monitoring...', new Date().toISOString());
 
   try {
-    // Fetch all users with their links
+    // First, fetch users with zero or insufficient credits to send notifications
+    const { data: insufficientCreditUsers, error: insufficientFetchError } = await supabase
+      .from('users')
+      .select('email, links, credit')
+      .lte('credit', 9) // Users with 9 or fewer credits (insufficient for even 1 ping)
+      .not('links', 'is', null); // Only users who have links to monitor
+
+    if (insufficientFetchError) {
+      console.error('Error fetching insufficient credit users:', insufficientFetchError);
+    } else if (insufficientCreditUsers && insufficientCreditUsers.length > 0) {
+      console.log(`Found ${insufficientCreditUsers.length} users with insufficient credits, sending notifications...`);
+      
+      for (const user of insufficientCreditUsers) {
+        if (user.links && user.links.length > 0) {
+          console.log(`Sending zero credit notification to ${user.email} (credit: ${user.credit})`);
+          await sendZeroCreditEmail(user.email);
+          
+          // Small delay between emails
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+    }
+
+    // Now fetch users with sufficient credit for monitoring
     const { data: users, error: fetchError } = await supabase
       .from('users')
       .select('email, links, credit, ping')
-      .gt('credit', 0); // Only process users with credit > 0
+      .gte('credit', 10); // Only process users with credit >= 10 (enough for at least 1 successful ping)
 
     if (fetchError) {
       console.error('Error fetching users:', fetchError);
       return;
     }
 
-    console.log(`Found ${users.length} users with credit to process`);
+    console.log(`Found ${users.length} users with sufficient credit to process`);
 
     // Process each user
     for (const user of users) {
@@ -324,15 +469,9 @@ async function monitorAllLinks() {
         continue;
       }
 
-      // Skip users with insufficient credit for at least one successful ping
-      if (credit < 10) {
-        console.log(`Skipping ${email}: insufficient credit (has ${credit}, needs at least 10 per successful ping)`);
-        continue;
-      }
-
       // Determine if this is a zero ping user (new user or no successful pings yet)
       const isZeroPingUser = ping === 0;
-      console.log(`Processing ${email}: ${links.length} links ${isZeroPingUser ? '(zero ping user - extended retry logic)' : ''}`);
+      console.log(`Processing ${email}: ${links.length} links ${isZeroPingUser ? '(zero ping user - extended retry logic)' : ''} (credit: ${credit})`);
       
       const failedLinks = [];
       let successfulPings = 0;
