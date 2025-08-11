@@ -371,11 +371,11 @@ async function sendFailureEmail(email, failedLinks) {
   }
 }
 
-// Function to update user stats (ping count and credit) - ONLY for successful pings
-async function updateUserStats(email, successfulPingCount, creditDeduction) {
+// Function to update user credit and link ping counts
+async function updateUserStats(userId, email, successfulPings, creditDeduction) {
   try {
     // Only update if there were successful pings
-    if (successfulPingCount === 0) {
+    if (successfulPings.length === 0) {
       console.log(`No successful pings for ${email}, skipping stats update`);
       return true;
     }
@@ -383,8 +383,8 @@ async function updateUserStats(email, successfulPingCount, creditDeduction) {
     // First get current user data
     const { data: existingUser, error: fetchError } = await supabase
       .from('users')
-      .select('ping, credit')
-      .eq('email', email)
+      .select('credit')
+      .eq('id', userId)
       .single();
 
     if (fetchError) {
@@ -392,30 +392,56 @@ async function updateUserStats(email, successfulPingCount, creditDeduction) {
       return false;
     }
 
-    // Calculate new values
-    const newPing = existingUser.ping + successfulPingCount;
+    // Calculate new credit value
     const newCredit = Math.max(0, existingUser.credit - creditDeduction);
 
-    // Update user's ping count and credit
-    const { error: updateError } = await supabase
+    // Update user's credit
+    const { error: updateUserError } = await supabase
       .from('users')
-      .update({ 
-        ping: newPing,
-        credit: newCredit 
-      })
-      .eq('email', email);
+      .update({ credit: newCredit })
+      .eq('id', userId);
 
-    if (updateError) {
-      console.error(`Error updating user ${email}:`, updateError);
+    if (updateUserError) {
+      console.error(`Error updating user credit for ${email}:`, updateUserError);
       return false;
     }
 
-    console.log(`Updated ${email}: ping=${newPing}, credit=${newCredit} (${successfulPingCount} successful pings)`);
+    // Update individual link ping counts and last_ping timestamps
+    const updatePromises = successfulPings.map(async (linkData) => {
+      const { error: updateLinkError } = await supabase
+        .from('links')
+        .update({ 
+          ping_count: linkData.newPingCount,
+          last_ping: new Date().toISOString()
+        })
+        .eq('id', linkData.linkId);
+
+      if (updateLinkError) {
+        console.error(`Error updating link ${linkData.url}:`, updateLinkError);
+        return false;
+      }
+      return true;
+    });
+
+    const linkUpdateResults = await Promise.all(updatePromises);
+    const allLinksUpdated = linkUpdateResults.every(result => result === true);
+
+    if (!allLinksUpdated) {
+      console.error(`Some link updates failed for user ${email}`);
+      return false;
+    }
+
+    console.log(`Updated ${email}: credit=${newCredit} (${successfulPings.length} successful pings)`);
     return true;
   } catch (error) {
     console.error(`Error updating user stats for ${email}:`, error);
     return false;
   }
+}
+
+// Helper function to determine if user has zero total pings across all links
+function hasZeroPings(userLinks) {
+  return userLinks.every(link => link.ping_count === 0);
 }
 
 // Main function to monitor all links
@@ -424,66 +450,88 @@ async function monitorAllLinks() {
 
   try {
     // First, fetch users with zero or insufficient credits to send notifications
+    // Join with links table to only get users who actually have links to monitor
     const { data: insufficientCreditUsers, error: insufficientFetchError } = await supabase
       .from('users')
-      .select('email, links, credit')
+      .select(`
+        id,
+        email, 
+        credit,
+        links (
+          id,
+          url
+        )
+      `)
       .lte('credit', 9) // Users with 9 or fewer credits (insufficient for even 1 ping)
-      .not('links', 'is', null); // Only users who have links to monitor
+      .not('links', 'is', null); // Only users who have links
 
     if (insufficientFetchError) {
       console.error('Error fetching insufficient credit users:', insufficientFetchError);
     } else if (insufficientCreditUsers && insufficientCreditUsers.length > 0) {
-      console.log(`Found ${insufficientCreditUsers.length} users with insufficient credits, sending notifications...`);
+      // Filter users who actually have links
+      const usersWithLinks = insufficientCreditUsers.filter(user => user.links && user.links.length > 0);
       
-      for (const user of insufficientCreditUsers) {
-        if (user.links && user.links.length > 0) {
-          console.log(`Sending zero credit notification to ${user.email} (credit: ${user.credit})`);
-          await sendZeroCreditEmail(user.email);
-          
-          // Small delay between emails
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
+      console.log(`Found ${usersWithLinks.length} users with insufficient credits, sending notifications...`);
+      
+      for (const user of usersWithLinks) {
+        console.log(`Sending zero credit notification to ${user.email} (credit: ${user.credit})`);
+        await sendZeroCreditEmail(user.email);
+        
+        // Small delay between emails
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
 
-    // Now fetch users with sufficient credit for monitoring
-    const { data: users, error: fetchError } = await supabase
+    // Now fetch users with sufficient credit for monitoring, along with their links
+    const { data: usersWithLinks, error: fetchError } = await supabase
       .from('users')
-      .select('email, links, credit, ping')
+      .select(`
+        id,
+        email, 
+        credit,
+        links (
+          id,
+          url,
+          ping_count
+        )
+      `)
       .gte('credit', 10); // Only process users with credit >= 10 (enough for at least 1 successful ping)
 
     if (fetchError) {
-      console.error('Error fetching users:', fetchError);
+      console.error('Error fetching users with links:', fetchError);
       return;
     }
 
-    console.log(`Found ${users.length} users with sufficient credit to process`);
+    // Filter out users with no links
+    const usersToProcess = usersWithLinks.filter(user => user.links && user.links.length > 0);
+    
+    console.log(`Found ${usersToProcess.length} users with sufficient credit and links to process`);
 
     // Process each user
-    for (const user of users) {
-      const { email, links, credit, ping } = user;
+    for (const user of usersToProcess) {
+      const { id: userId, email, credit, links } = user;
       
-      // Skip users with no links
-      if (!links || links.length === 0) {
-        console.log(`Skipping ${email}: no links to monitor`);
-        continue;
-      }
-
-      // Determine if this is a zero ping user (new user or no successful pings yet)
-      const isZeroPingUser = ping === 0;
+      // Determine if this is a zero ping user (new user or no successful pings yet on any link)
+      const isZeroPingUser = hasZeroPings(links);
       console.log(`Processing ${email}: ${links.length} links ${isZeroPingUser ? '(zero ping user - extended retry logic)' : ''} (credit: ${credit})`);
       
       const failedLinks = [];
-      let successfulPings = 0;
+      const successfulPings = [];
 
       // Ping all links for this user
-      for (const url of links) {
+      for (const link of links) {
+        const { id: linkId, url, ping_count } = link;
         console.log(`Pinging API endpoint: ${url} for ${email}${isZeroPingUser ? ' with extended timeout' : ''}`);
         
         const result = await pingUrl(url, 30000, isZeroPingUser);
         
         if (result.success) {
-          successfulPings++;
+          successfulPings.push({
+            linkId,
+            url,
+            currentPingCount: ping_count,
+            newPingCount: ping_count + 1
+          });
           const healthStatus = result.message || 'OK';
           const attemptInfo = result.attempts > 1 ? ` (succeeded on attempt ${result.attempts})` : '';
           console.log(`✓ ${url} - Status: ${result.status} (${result.responseTime}ms) - ${healthStatus}${attemptInfo}`);
@@ -506,9 +554,9 @@ async function monitorAllLinks() {
       }
 
       // Update user stats ONLY for successful pings
-      const creditDeduction = successfulPings * 10; // Only charge for successful pings
+      const creditDeduction = successfulPings.length * 10; // Only charge for successful pings
       
-      await updateUserStats(email, successfulPings, creditDeduction);
+      await updateUserStats(userId, email, successfulPings, creditDeduction);
 
       // Send failure notification if there are failed links
       if (failedLinks.length > 0) {
@@ -516,7 +564,7 @@ async function monitorAllLinks() {
         await sendFailureEmail(email, failedLinks);
       }
 
-      console.log(`Completed processing ${email}: ${successfulPings}/${links.length} successful pings (charged ${creditDeduction} credits)${isZeroPingUser ? ' - Used extended retry logic' : ''}`);
+      console.log(`Completed processing ${email}: ${successfulPings.length}/${links.length} successful pings (charged ${creditDeduction} credits)${isZeroPingUser ? ' - Used extended retry logic' : ''}`);
       
       // Delay between users to avoid overwhelming the system
       // Longer delay after processing zero ping users
