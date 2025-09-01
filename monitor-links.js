@@ -9,13 +9,68 @@ const supabase = createClient(
 );
 
 // Initialize email transporter
-const transporter = nodemailer.createTransport({
+const transporter = nodemailer.createTransporter({
   service: 'gmail',
   auth: {
     user: process.env.GMAIL_USER,
     pass: process.env.GMAIL_PASS,
   },
 });
+
+// Function to store ping response time with 5-entry limit per link
+async function storePingResponseTime(linkId, responseTime) {
+  try {
+    // First, get current ping count for this link
+    const { data: currentPings, error: fetchError } = await supabase
+      .from('pings')
+      .select('id')
+      .eq('link_id', linkId)
+      .order('created_at', { ascending: true });
+
+    if (fetchError) {
+      console.error(`Error fetching existing pings for link ${linkId}:`, fetchError);
+      return false;
+    }
+
+    // If we already have 5 or more pings, delete the oldest ones
+    if (currentPings && currentPings.length >= 5) {
+      const pingsToDelete = currentPings.slice(0, currentPings.length - 4); // Keep only the 4 most recent
+      const deleteIds = pingsToDelete.map(ping => ping.id);
+      
+      const { error: deleteError } = await supabase
+        .from('pings')
+        .delete()
+        .in('id', deleteIds);
+
+      if (deleteError) {
+        console.error(`Error deleting old pings for link ${linkId}:`, deleteError);
+        return false;
+      }
+      
+      console.log(`Deleted ${pingsToDelete.length} old ping records for link ${linkId}`);
+    }
+
+    // Insert the new ping record
+    const { error: insertError } = await supabase
+      .from('pings')
+      .insert({
+        link_id: linkId,
+        response_time: responseTime,
+        created_at: new Date().toISOString()
+      });
+
+    if (insertError) {
+      console.error(`Error inserting ping record for link ${linkId}:`, insertError);
+      return false;
+    }
+
+    console.log(`Stored ping response time ${responseTime}ms for link ${linkId}`);
+    return true;
+  } catch (error) {
+    console.error(`Error in storePingResponseTime for link ${linkId}:`, error);
+    return false;
+  }
+}
 
 // Function to send zero credit notification email
 async function sendZeroCreditEmail(email) {
@@ -406,8 +461,9 @@ async function updateUserStats(userId, email, successfulPings, creditDeduction) 
       return false;
     }
 
-    // Update individual link ping counts and last_ping timestamps
+    // Update individual link ping counts, last_ping timestamps, and store response times
     const updatePromises = successfulPings.map(async (linkData) => {
+      // Update link ping count and last_ping
       const { error: updateLinkError } = await supabase
         .from('links')
         .update({ 
@@ -420,6 +476,14 @@ async function updateUserStats(userId, email, successfulPings, creditDeduction) 
         console.error(`Error updating link ${linkData.url}:`, updateLinkError);
         return false;
       }
+
+      // Store response time in pings table with 5-entry limit
+      const pingStored = await storePingResponseTime(linkData.linkId, linkData.responseTime);
+      if (!pingStored) {
+        console.error(`Error storing ping response time for link ${linkData.url}`);
+        return false;
+      }
+
       return true;
     });
 
@@ -431,7 +495,7 @@ async function updateUserStats(userId, email, successfulPings, creditDeduction) 
       return false;
     }
 
-    console.log(`Updated ${email}: credit=${newCredit} (${successfulPings.length} successful pings)`);
+    console.log(`Updated ${email}: credit=${newCredit} (${successfulPings.length} successful pings with response times stored)`);
     return true;
   } catch (error) {
     console.error(`Error updating user stats for ${email}:`, error);
@@ -530,7 +594,8 @@ async function monitorAllLinks() {
             linkId,
             url,
             currentPingCount: ping_count,
-            newPingCount: ping_count + 1
+            newPingCount: ping_count + 1,
+            responseTime: result.responseTime
           });
           const healthStatus = result.message || 'OK';
           const attemptInfo = result.attempts > 1 ? ` (succeeded on attempt ${result.attempts})` : '';
