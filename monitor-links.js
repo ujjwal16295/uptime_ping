@@ -516,18 +516,19 @@ async function monitorAllLinks() {
     // First, fetch users with zero or insufficient credits to send notifications
     // Join with links table to only get users who actually have links to monitor
     const { data: insufficientCreditUsers, error: insufficientFetchError } = await supabase
-      .from('users')
-      .select(`
+    .from('users')
+    .select(`
+      id,
+      email, 
+      credit,
+      links (
         id,
-        email, 
-        credit,
-        links (
-          id,
-          url
-        )
-      `)
-      .lte('credit', 9) // Users with 9 or fewer credits (insufficient for even 1 ping)
-      .not('links', 'is', null); // Only users who have links
+        url
+      )
+    `)
+    .eq('plan', 'free')  // Add this line
+    .lte('credit', 9)
+    .not('links', 'is', null);
 
     if (insufficientFetchError) {
       console.error('Error fetching insufficient credit users:', insufficientFetchError);
@@ -548,18 +549,19 @@ async function monitorAllLinks() {
 
     // Now fetch users with sufficient credit for monitoring, along with their links
     const { data: usersWithLinks, error: fetchError } = await supabase
-      .from('users')
-      .select(`
+    .from('users')
+    .select(`
+      id,
+      email, 
+      credit,
+      links (
         id,
-        email, 
-        credit,
-        links (
-          id,
-          url,
-          ping_count
-        )
-      `)
-      .gte('credit', 10); // Only process users with credit >= 10 (enough for at least 1 successful ping)
+        url,
+        ping_count
+      )
+    `)
+    .eq('plan', 'free')  // Add this line
+    .gte('credit', 10);
 
     if (fetchError) {
       console.error('Error fetching users with links:', fetchError);
