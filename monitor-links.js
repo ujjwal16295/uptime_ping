@@ -17,60 +17,7 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// Function to store ping response time with 5-entry limit per link
-async function storePingResponseTime(linkId, responseTime) {
-  try {
-    // First, get current ping count for this link
-    const { data: currentPings, error: fetchError } = await supabase
-      .from('pings')
-      .select('id')
-      .eq('link_id', linkId)
-      .order('created_at', { ascending: true });
 
-    if (fetchError) {
-      console.error(`Error fetching existing pings for link ${linkId}:`, fetchError);
-      return false;
-    }
-
-    // If we already have 5 or more pings, delete the oldest ones
-    if (currentPings && currentPings.length >= 5) {
-      const pingsToDelete = currentPings.slice(0, currentPings.length - 4); // Keep only the 4 most recent
-      const deleteIds = pingsToDelete.map(ping => ping.id);
-      
-      const { error: deleteError } = await supabase
-        .from('pings')
-        .delete()
-        .in('id', deleteIds);
-
-      if (deleteError) {
-        console.error(`Error deleting old pings for link ${linkId}:`, deleteError);
-        return false;
-      }
-      
-      console.log(`Deleted ${pingsToDelete.length} old ping records for link ${linkId}`);
-    }
-
-    // Insert the new ping record
-    const { error: insertError } = await supabase
-      .from('pings')
-      .insert({
-        link_id: linkId,
-        response_time: responseTime,
-        created_at: new Date().toISOString()
-      });
-
-    if (insertError) {
-      console.error(`Error inserting ping record for link ${linkId}:`, insertError);
-      return false;
-    }
-
-    console.log(`Stored ping response time ${responseTime}ms for link ${linkId}`);
-    return true;
-  } catch (error) {
-    console.error(`Error in storePingResponseTime for link ${linkId}:`, error);
-    return false;
-  }
-}
 
 // Function to ping a URL with retry logic for zero ping count users
 async function pingUrl(url, timeout = 30000, isZeroPingUser = false) {
@@ -329,12 +276,7 @@ async function updateLinkStats(successfulPings) {
         return false;
       }
 
-      // Store response time in pings table with 5-entry limit
-      const pingStored = await storePingResponseTime(linkData.linkId, linkData.responseTime);
-      if (!pingStored) {
-        console.error(`Error storing ping response time for link ${linkData.url}`);
-        return false;
-      }
+
 
       return true;
     });
